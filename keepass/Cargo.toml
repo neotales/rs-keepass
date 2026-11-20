@@ -1,7 +1,7 @@
 [package]
 name = "neotales-keepass"
 description = "Headless, bounded KeePass KDBX document and wire codec"
-version = "0.0.0-alpha.0"
+version = "0.0.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

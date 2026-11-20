@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "neotales-keepass"
-version = "0.0.0-alpha.0"
+version = "0.0.0-alpha.1"
 dependencies = [
  "aes",
  "argon2",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "neotales-keepass-platform"
-version = "0.0.0-alpha.0"
+version = "0.0.0-alpha.1"
 dependencies = [
  "memmap2",
  "neotales-keepass",

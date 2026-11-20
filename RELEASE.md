@@ -18,12 +18,13 @@ This repository ships two crates that share the tag: `neotales-keepass` from
 by path, so the publish job uploads keepass first and keepass-platform second.
 
 Publishing in the other order fails: crates.io rejects a crate whose dependency
-version is not in the index yet. The dry runs go in the same order, and the
-second one can still fail while the crates.io index has not caught up with the
-keepass upload from the same run. That failure is index lag, not a broken
-workspace: confirm with `cargo search neotales-keepass` and re-run the job once
-the index lists the version. Do not change the dependency from a version to a
-bare path to get past it, because a published crate cannot carry a path.
+version is not in the index yet. On the releasing commit, `cargo publish -p
+neotales-keepass-platform --dry-run` fails for that reason, because
+`0.0.0-alpha.1` of keepass is not published yet. That specific failure is
+expected. A compile failure is not. The publish job uploads keepass first and
+retries the platform crate while the index catches up. Do not change the
+dependency from a version to a bare path to get past it, because a published
+crate cannot carry a path.
 
 Bump the version, commit, push, then tag that commit:
 
@@ -102,9 +103,14 @@ at `~/work/rs/README.STYLE.md` and is not part of a crate.
    The lockfile is what the scheduled audit checks.
 2. Push the commit.
 3. Tag it `vX.Y.Z` and push the tag.
-4. The workflow runs the checks, then `cargo publish --dry-run` of both crates,
-   then publishes keepass, then keepass-platform, with a token minted for that
-   run.
+4. The workflow runs the checks. The keepass dry run must pass. The platform
+   dry run may fail only because that keepass version is not in the index yet;
+   that is expected on the releasing commit, and any other failure still fails
+   the job. The publish job then uploads keepass, waits through index lag, and
+   uploads keepass-platform. One OIDC exchange covers both crates when each has
+   a trusted publisher for this repository, `release.yml`, and an empty
+   environment. A re-run skips a version already on crates.io. Do not republish
+   it, and do not delete or move the tag.
 
 A manual run, `workflow_dispatch`, runs the checks and the dry runs only. It
 never publishes, whatever branch it is started from.
@@ -129,6 +135,6 @@ cannot publish these crates later.
 | --- | --- |
 | `version` job: tag does not match `vX.Y.Z` | A manifest version and the tag disagree, or the two manifests disagree. Delete the tag, fix, re-tag. |
 | Publish job: OIDC exchange fails | The crate does not exist yet, or the trusted publisher does not match: wrong repository, wrong workflow filename, or an environment name that is set on one side and not the other. |
-| Publish job: `neotales-keepass-platform`: no matching package named `neotales-keepass` | The index has not caught up with the keepass upload from the same run. That is index lag: confirm the version with `cargo search neotales-keepass` and re-run the job. |
+| Publish job: platform cannot select `neotales-keepass` | Index lag after the keepass upload. The job retries for a few minutes. If it still fails, confirm the version is on crates.io and re-run the job. The re-run skips a version already uploaded. Do not delete or move the tag, and do not publish that version again by hand. |
 | Publish job: version already uploaded | The version was published before, usually by the manual first release. Bump the version. |
 | Publish job: `cargo publish` rejects the token | Trusted Publishing Only mode is on and the crate has no trusted publisher configured. |

@@ -1,7 +1,7 @@
 [package]
 name = "neotales-keepass-platform"
 description = "Optional platform-specific memory protection adapters for neotales-keepass"
-version = "0.0.0-alpha.0"
+version = "0.0.0-alpha.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -24,7 +24,7 @@ memory-pin = ["dep:memmap2", "dep:region"]
 [dependencies]
 # The version is required as well as the path: cargo ignores the version while the
 # path resolves, and refuses to publish the crate without it.
-neotales-keepass = { path = "../keepass", version = "0.0.0-alpha.0" }
+neotales-keepass = { path = "../keepass", version = "=0.0.0-alpha.1" }
 zeroize = { version = "=1.9.0", features = ["derive"] }
 memmap2 = { version = "0.9.11", optional = true }
 region = { version = "4.0.1", optional = true }

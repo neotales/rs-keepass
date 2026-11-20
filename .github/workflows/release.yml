@@ -32,9 +32,9 @@ env:
 
 jobs:
   # Runs on both triggers. On workflow_dispatch this job is the whole release:
-  # checks and a `cargo publish --dry-run` of both crates, never a real publish.
-  # The dry runs go in publish order, keepass then keepass-platform, because the
-  # platform crate depends on neotales-keepass by version as well as by path.
+  # checks and dry runs, never a real publish. The platform dry run may fail
+  # only because its keepass version is not in the index yet. That is expected
+  # on the releasing commit. The publish job uploads keepass first and retries.
   check:
     name: pre-publish checks
     runs-on: ubuntu-latest
@@ -61,16 +61,31 @@ jobs:
       - name: Doctests
         run: cargo test --workspace --doc --all-features
 
-      # The second dry run can fail while the crates.io index has not caught up
-      # with the keepass upload from this same run. That failure is the index,
-      # not the workspace. See RELEASE.md.
-      #
-      # Both crates are named with `-p` so the packaging is what is published,
-      # and the order is the publish order.
+      # keepass can be packaged against the registry. keepass-platform names
+      # neotales-keepass by the version in this commit, which is not in the
+      # index until this release uploads it. That dry-run failure is expected
+      # on the releasing commit. Any other failure still fails the job.
+      # See RELEASE.md.
       - name: Package without publishing
         run: |
+          set -euo pipefail
           cargo publish -p neotales-keepass --dry-run --locked
-          cargo publish -p neotales-keepass-platform --dry-run --locked
+          set +e
+          output=$(cargo publish -p neotales-keepass-platform --dry-run --locked 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if printf '%s\n' "$output" | grep -F 'failed to select a version for the requirement' >/dev/null \
+            && printf '%s\n' "$output" | grep -F 'neotales-keepass' >/dev/null \
+            && printf '%s\n' "$output" | grep -F "candidate versions found which didn't match" >/dev/null; then
+            echo "expected: platform dry-run cannot see the unpublished keepass version on the index yet"
+            exit 0
+          fi
+          echo "platform dry-run failed for a reason other than the unpublished sibling version"
+          exit 1
 
   version:
     name: tag matches the crate version
@@ -156,16 +171,71 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
-      # neotales-keepass first: neotales-keepass-platform depends on it by
-      # version. The second upload can fail while the index has not caught up
-      # with the first; that is index lag, and re-running the job is the fix.
-      # See RELEASE.md.
-      - name: Publish the core crate
+      # One exchange covers every crate in this repository whose trusted
+      # publisher matches release.yml and an empty environment. Publish keepass
+      # first. The platform crate then retries while the index catches up.
+      # A re-run skips a version already on crates.io. Do not republish, and do
+      # not delete or move the tag.
+      - name: Publish both crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p neotales-keepass --locked
+        run: |
+          set -euo pipefail
 
-      - name: Publish the platform crate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p neotales-keepass-platform --locked
+          version_of() {
+            python3 - "$1" <<'PY'
+          import sys
+          import tomllib
+          with open(sys.argv[1], "rb") as handle:
+              version = tomllib.load(handle)["package"]["version"]
+          if not isinstance(version, str):
+              raise SystemExit(f"{sys.argv[1]} version is not a string")
+          print(version)
+          PY
+          }
+
+          registry_has() {
+            local crate="$1" version="$2" code
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H 'User-Agent: neotales-release (https://github.com/neotales)' \
+              "https://crates.io/api/v1/crates/${crate}/${version}" || echo 000)
+            [ "$code" = "200" ]
+          }
+
+          publish_crate() {
+            local package="$1" manifest="$2"
+            local version attempt output status
+            version=$(version_of "$manifest")
+            if registry_has "$package" "$version"; then
+              echo "$package $version is already on crates.io; not publishing again"
+              return 0
+            fi
+            for attempt in $(seq 1 15); do
+              set +e
+              output=$(cargo publish -p "$package" --locked 2>&1)
+              status=$?
+              set -e
+              printf '%s\n' "$output"
+              if [ "$status" -eq 0 ]; then
+                echo "uploaded $package $version"
+                return 0
+              fi
+              if printf '%s\n' "$output" | grep -F 'already uploaded' >/dev/null; then
+                echo "$package $version already uploaded; not publishing again"
+                return 0
+              fi
+              if printf '%s\n' "$output" | grep -F 'failed to select a version for the requirement' >/dev/null \
+                || printf '%s\n' "$output" | grep -Eiq '429|rate limit|too many requests'; then
+                echo "retryable publish failure for $package (attempt $attempt); waiting 20s"
+                sleep 20
+                continue
+              fi
+              echo "publish of $package failed"
+              return 1
+            done
+            echo "publish of $package did not succeed after retries"
+            return 1
+          }
+
+          publish_crate neotales-keepass keepass/Cargo.toml
+          publish_crate neotales-keepass-platform keepass-platform/Cargo.toml
