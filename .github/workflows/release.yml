@@ -50,14 +50,23 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: cargo test --workspace --all-targets --all-features
+
+      # `--all-targets` skips doctests, so they are a step of their own. Every
+      # job that runs tests runs them, including this one, because a doctest
+      # that no longer compiles is a broken crate on crates.io.
+      - name: Doctests
+        run: cargo test --workspace --doc --all-features
 
       # The second dry run can fail while the crates.io index has not caught up
       # with the keepass upload from this same run. That failure is the index,
       # not the workspace. See RELEASE.md.
+      #
+      # Both crates are named with `-p` so the packaging is what is published,
+      # and the order is the publish order.
       - name: Package without publishing
         run: |
           cargo publish -p neotales-keepass --dry-run --locked

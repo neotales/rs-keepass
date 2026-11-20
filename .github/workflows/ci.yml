@@ -2,7 +2,14 @@ name: ci
 
 # One repository, a virtual workspace with two crates: `keepass/` is
 # `neotales-keepass` and `keepass-platform/` is `neotales-keepass-platform`.
-# Both are default members, so no command needs `--workspace` to reach them.
+# Both are shippable, so every cargo command that formats, lints, tests or
+# documents them passes `--workspace`. `default-members` is a convenience for a
+# developer's bare `cargo test`; a later edit to it must not be able to hide a
+# crate from CI. `--all-targets` does not run doctests, so each job that runs
+# tests runs a `--doc` pass as well.
+#
+# The `--all-features` flags enable both crates' features at once, including
+# `keepass-platform`'s off-by-default `windows-dpapi` and `memory-pin`.
 
 on:
   push:
@@ -45,15 +52,20 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: cargo test --workspace --all-targets --all-features
+
+      # Separate from the test step above, because `--all-targets` selects the
+      # unit, integration, example and benchmark targets and not doctests.
+      - name: Doctests
+        run: cargo test --workspace --doc --all-features
 
       - name: Documentation
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --all-features --no-deps
+        run: cargo doc --workspace --all-features --no-deps
 
   msrv:
     name: msrv
@@ -98,4 +110,10 @@ jobs:
           PY
 
       - name: Test on the minimum supported Rust version
-        run: cargo test --all-targets --all-features
+        run: cargo test --workspace --all-targets --all-features
+
+      # The same split as the matrix job: `--all-targets` does not include
+      # doctests, and a doctest that uses a newer API breaks the declared
+      # minimum just as a unit test does.
+      - name: Doctests on the minimum supported Rust version
+        run: cargo test --workspace --doc --all-features
