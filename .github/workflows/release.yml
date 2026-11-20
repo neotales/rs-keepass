@@ -1,7 +1,8 @@
 name: release
 
 # Publishing is driven by a tag, never by a branch. The tag must equal `v` plus
-# the version in Cargo.toml, so the thing that ran is a thing that can be named.
+# the version in both manifests, so the thing that ran is a thing that can be
+# named.
 #
 # Trusted publishing: the publish job asks crates.io for a short-lived token
 # over OIDC. There is no CARGO_REGISTRY_TOKEN secret in this repository.
@@ -31,7 +32,9 @@ env:
 
 jobs:
   # Runs on both triggers. On workflow_dispatch this job is the whole release:
-  # checks and `cargo publish --dry-run`, never a real publish.
+  # checks and a `cargo publish --dry-run` of both crates, never a real publish.
+  # The dry runs go in publish order, keepass then keepass-platform, because the
+  # platform crate depends on neotales-keepass by version as well as by path.
   check:
     name: pre-publish checks
     runs-on: ubuntu-latest
@@ -52,8 +55,13 @@ jobs:
       - name: Test
         run: cargo test --all-targets --all-features
 
+      # The second dry run can fail while the crates.io index has not caught up
+      # with the keepass upload from this same run. That failure is the index,
+      # not the workspace. See RELEASE.md.
       - name: Package without publishing
-        run: cargo publish --dry-run
+        run: |
+          cargo publish -p neotales-keepass --dry-run --locked
+          cargo publish -p neotales-keepass-platform --dry-run --locked
 
   version:
     name: tag matches the crate version
@@ -63,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Compare the tag with Cargo.toml
+      - name: Compare the tag with both manifests
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -73,26 +81,38 @@ jobs:
           import sys
           import tomllib
 
-          with open("Cargo.toml", "rb") as handle:
-              manifest = tomllib.load(handle)
+          manifests = {
+              "neotales-keepass": "keepass/Cargo.toml",
+              "neotales-keepass-platform": "keepass-platform/Cargo.toml",
+          }
 
-          package = manifest.get("package")
-          if not isinstance(package, dict):
-              sys.exit("Cargo.toml has no [package] table")
-
-          version = package.get("version")
-          if not isinstance(version, str):
-              sys.exit(
-                  "Cargo.toml [package] version is not a literal string. "
-                  "This template expects a single crate, not an inherited workspace version."
-              )
+          versions = {}
+          for name, path in manifests.items():
+              with open(path, "rb") as handle:
+                  package = tomllib.load(handle).get("package")
+              if not isinstance(package, dict):
+                  sys.exit(f"{path} has no [package] table")
+              version = package.get("version")
+              if not isinstance(version, str):
+                  sys.exit(
+                      f"{path} [package] version is not a literal string. "
+                      "Each crate must carry the published version."
+                  )
+              versions[name] = version
 
           tag = os.environ["TAG"]
-          expected = f"v{version}"
           print(f"tag: {tag}")
-          print(f"Cargo.toml version: {version}")
+          for name, version in versions.items():
+              print(f"{name}: {version}")
+
+          distinct = set(versions.values())
+          if len(distinct) != 1:
+              print(f"::error::the crates carry different versions: {versions}")
+              sys.exit(1)
+
+          expected = f"v{distinct.pop()}"
           if tag != expected:
-              print(f"::error::tag {tag} does not match {expected} from Cargo.toml")
+              print(f"::error::tag {tag} does not match {expected}")
               sys.exit(1)
           PY
 
@@ -127,7 +147,16 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
-      - name: Publish
+      # neotales-keepass first: neotales-keepass-platform depends on it by
+      # version. The second upload can fail while the index has not caught up
+      # with the first; that is index lag, and re-running the job is the fix.
+      # See RELEASE.md.
+      - name: Publish the core crate
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish
+        run: cargo publish -p neotales-keepass --locked
+
+      - name: Publish the platform crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p neotales-keepass-platform --locked
